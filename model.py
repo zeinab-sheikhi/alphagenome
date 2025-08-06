@@ -105,3 +105,22 @@ class ConvBlock(nn.Module):
             x = self.conv(x)
         
         return x
+
+
+class DNAEmbedder(nn.Module):
+    def __init__(self, input_channels: int, num_channels: int = 768, width: int = 15):
+        super().__init__()
+        self.conv_layer = nn.Conv1d(
+            in_channels=input_channels,
+            out_channels=num_channels,
+            kernel_size=width,
+            padding=width // 2, 
+        )
+        self.conv_block = ConvBlock(num_channels=num_channels)
+    
+    def forward(self, x: torch.Tensor):
+        x = x.transpose(1, 2)
+        out = self.conv_layer(x)  # (batch_size, num_channels, seq_len)
+        out = out.transpose(1, 2)  # (batch_size, seq_len, num_channels)
+        return out + self.conv_block(out)
+
