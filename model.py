@@ -97,7 +97,7 @@ class ConvBlock(nn.Module):
             x = self.linear(x)
         else:
             if self._conv is None:
-                self.conv = StandardizedConv1D(
+                self._conv = StandardizedConv1D(
                     input_channels=x.size(-1), 
                     output_channels=self.num_channels, 
                     kernel_size=self.width,
