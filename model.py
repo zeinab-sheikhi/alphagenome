@@ -43,7 +43,7 @@ class StandardizedConv1D(nn.Module):
             output_channels: int,
             kernel_size: int,
             eps: float = 1e-6,
-        ):
+    ):
         super().__init__()
         self.input_channels = input_channels
         self.output_channels = output_channels
@@ -54,8 +54,7 @@ class StandardizedConv1D(nn.Module):
         self.gain = nn.Parameter(torch.ones(output_channels))
     
     def forward(self, x: torch.Tensor):
-        if x.size(-1) != self.input_channels:
-            raise ValueError(f"Expected {self.input_channels} input channels, but got {x.size(-1)}")
+        assert x.size(-1) == self.input_channels, ValueError(f"Expected {self.input_channels} input channels, but got {x.size(-1)}")
         
         weight_mean = torch.mean(self.weight, dim=(1, 2), keepdim=True)
         weight_var = torch.var(self.weight, dim=(1, 2), keepdim=True)
@@ -80,11 +79,29 @@ class ConvBlock(nn.Module):
         super().__init__()
         self.num_channels = num_channels
         self.width = width
+        self.rms_norm = RMSBatchNorm1D(num_features=num_channels)
+        self.gelu = nn.GELU()
+        self.linear = nn.Linear(num_channels, num_channels)
+        self._conv = None
     
+    @property
+    def conv(self):
+        if self._conv is None:
+            raise RuntimeError("Conv Layer is not initialized. Calling forward first.")
+        return self._conv
+
     def forward(self, x: torch.Tensor):
-        x = RMSBatchNorm1D(self.num_channels)(x)
-        x = nn.GELU(x)
+        x = self.rms_norm(x)
+        x = self.gelu(x)
         if self.width == 1:
-            x = nn.Linear(self.num_channels, self.num_channels)(x)
+            x = self.linear(x)
         else:
-            x = 
+            if self._conv is None:
+                self.conv = StandardizedConv1D(
+                    input_channels=x.size(-1), 
+                    output_channels=self.num_channels, 
+                    kernel_size=self.width,
+                )
+            x = self.conv(x)
+        
+        return x
