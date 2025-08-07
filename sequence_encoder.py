@@ -26,7 +26,7 @@ class RMSBatchNorm1D(nn.Module):
                 batch_variance = torch.var(x, dim=0, unbiased=False)  # (num_features, )
             else:
                 # x.shape = (batch_size, seq_len, num_features)
-                x_reshaped = x.view(-1, x.size(-1))  # (batch_size * seq_len, num_features)
+                x_reshaped = x.reshape(-1, x.size(-1))  # (batch_size * seq_len, num_features)
                 batch_variance = torch.var(x_reshaped, dim=0, unbiased=False)  # (num_features, )
         else:
             batch_variance = self.running_var
@@ -85,7 +85,7 @@ class ConvBlock(nn.Module):
     ):
         super().__init__()
         self.kernel_size = kernel_size
-        self.rms_norm = RMSBatchNorm1D(num_features=out_channels)
+        self.rms_norm = RMSBatchNorm1D(num_features=in_channels)
         self.gelu = nn.GELU()
         self.linear = nn.Linear(in_channels, out_channels)
         self.conv = StandardizedConv1D(
@@ -159,14 +159,18 @@ class SequenceEncoder(nn.Module):
         in_channels: int, 
         initial_channels: int = 768, 
         channel_increment: int = 128,
-        bin_sizes: list = [2, 4, 8, 16, 32, 64],
+        bin_sizes: list = None,
     ):
         super().__init__()
+        
+        if bin_sizes is None:
+            bin_sizes = [1, 2, 4, 8, 16, 32, 64]
+        
         self.bin_sizes = bin_sizes
         self.channel_increment = channel_increment
 
-        self.blocks = nn.ModuleList()
-        self.max_pools = nn.ModuleList()
+        self.blocks = nn.ModuleDict()
+        self.max_pools = nn.ModuleDict()
 
         current_channels = in_channels
         for i, bin_size in enumerate(self.bin_sizes):
@@ -191,7 +195,7 @@ class SequenceEncoder(nn.Module):
             if i < len(self.bin_sizes) - 1:
                 self.max_pools[f"pool_{bin_size}"] = nn.MaxPool1d(kernel_size=2, stride=2)
     
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict]:
         intermediates = {}
         for i, bin_size in enumerate(self.bin_sizes):
             x = self.blocks[f"bin_{bin_size}"](x)
