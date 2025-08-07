@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "torch",
+    "numpy",
 ]
 
 [tool.uv]

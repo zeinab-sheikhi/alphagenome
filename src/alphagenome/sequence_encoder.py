@@ -14,18 +14,18 @@ class RMSBatchNorm1D(nn.Module):
         self.eps = eps 
         self.momentum = momentum
 
-        self.gamma = nn.Parameter(torch.ones(num_features))
-        self.beta = nn.Parameter(torch.zeros(num_features))
+        self.gamma = nn.Parameter(torch.ones(num_features))  # scale
+        self.beta = nn.Parameter(torch.zeros(num_features))  # shift
 
         self.register_buffer("running_rms_squared", torch.ones(num_features))
     
     def forward(self, x: torch.Tensor):
         if self.training:
-            batch_rms_squared = torch.mean(x ** 2, dim=0, keepdim=True)  # (1, seq_len, num_features)
+            batch_rms_squared = torch.mean(x.pow(2), dim=0, keepdim=True)  # (1, seq_len, num_features)
         else:
             batch_rms_squared = self.running_rms_squared.view(1, 1, -1)  # (1, 1, num_features)
         
-        xhat = x / torch.sqrt(batch_rms_squared + self.eps)  # (batch_size, seq_len, num_features)
+        xhat = x * torch.rsqrt(batch_rms_squared + self.eps)  # (batch_size, seq_len, num_features)
         output = self.gamma.view(1, 1, -1) * xhat + self.beta.view(1, 1, -1)
         
         if self.training:
@@ -55,12 +55,12 @@ class StandardizedConv1D(nn.Module):
     def forward(self, x: torch.Tensor):
         assert x.size(-1) == self.in_channels, ValueError(f"Expected {self.in_channels} input channels, but got {x.size(-1)}")
         
-        weight_mean = torch.mean(self.weight, dim=(1, 2), keepdim=True)
-        weight_var = torch.var(self.weight, dim=(1, 2), keepdim=True)
+        weight_mean = torch.mean(self.weight, dim=(1, 2), keepdim=True)  # (out_channels, 1, 1)
+        weight_var = torch.var(self.weight, dim=(1, 2), keepdim=True)  # (out_channels, 1, 1)
         weight_standardized = (self.weight - weight_mean) / torch.sqrt(weight_var + self.eps)
         scaled_weight = self.gain.view(-1, 1, 1) * weight_standardized
 
-        x_conv = x.transpose(1, 2)  # (batch_size, input_channels, seq_len)
+        x_conv = x.transpose(1, 2)  # (batch_size, in_channels, seq_len)
         
         output = F.conv1d(
             input=x_conv,
@@ -68,7 +68,7 @@ class StandardizedConv1D(nn.Module):
             padding=self.kernel_size // 2
         )
         
-        return output.transpose(1, 2)  # (batch_size, seq_len, output_channels)
+        return output.transpose(1, 2)  # (batch_size, seq_len, out_channels)
 
 
 class ConvBlock(nn.Module):
