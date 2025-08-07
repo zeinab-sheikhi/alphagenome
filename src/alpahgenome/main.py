@@ -1,5 +1,5 @@
 import torch
-from sequence_encoder import SequenceEncoder
+from src.alpahgenome.sequence_encoder import SequenceEncoder
 
 
 def test_sequence_encoder():
