@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F
 
+from typing import Optional
+
 
 class RMSBatchNorm1D(nn.Module):
     def __init__(
@@ -143,8 +145,7 @@ class DownResBlock(nn.Module):
             x_padded = x
         
         out = out + x_padded
-        out = out + self.conv2(out)
-        return out
+        return out + self.conv2(out)
 
 
 class SequenceEncoder(nn.Module):
@@ -153,7 +154,7 @@ class SequenceEncoder(nn.Module):
         in_channels: int, 
         initial_channels: int = 768, 
         channel_increment: int = 128,
-        bin_sizes: list = None,
+        bin_sizes: Optional[list] = None,
     ):
         super().__init__()
         
@@ -167,8 +168,8 @@ class SequenceEncoder(nn.Module):
         self.max_pools = nn.ModuleDict()
 
         current_channels = in_channels
-        for i, bin_size in enumerate(self.bin_sizes):
-            
+        
+        for bin_size in self.bin_sizes:    
             # Use DNAEmbedder for bin_size = 1
             if bin_size == 1:
                 self.blocks[f"bin_{bin_size}"] = DNAEmbedder(
@@ -185,19 +186,15 @@ class SequenceEncoder(nn.Module):
                 )
                 current_channels = out_channels
             
-            # Add max pooling (except for the last bin size)
-            if i < len(self.bin_sizes) - 1:
-                self.max_pools[f"pool_{bin_size}"] = nn.MaxPool1d(kernel_size=2, stride=2)
+            self.max_pools[f"pool_{bin_size}"] = nn.MaxPool1d(kernel_size=2, stride=2)
     
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict]:
         intermediates = {}
-        for i, bin_size in enumerate(self.bin_sizes):
+        for bin_size in self.bin_sizes:
             x = self.blocks[f"bin_{bin_size}"](x)
             intermediates[f"bin_size_{bin_size}"] = x
-
-            if i < len(self.bin_sizes) - 1:
-                x = x.transpose(1, 2)
-                x = self.max_pools[f"pool_{bin_size}"](x)
-                x = x.transpose(1, 2)
+            x = x.transpose(1, 2)
+            x = self.max_pools[f"pool_{bin_size}"](x)
+            x = x.transpose(1, 2)
         
         return x, intermediates
