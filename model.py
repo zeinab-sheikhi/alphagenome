@@ -151,3 +151,55 @@ class DownResBlock(nn.Module):
         out = out + x_padded
         out = out + self.conv2(out)
         return out
+
+
+class SequenceEncoder(nn.Module):
+    def __init__(
+        self,
+        in_channels: int, 
+        initial_channels: int = 768, 
+        channel_increment: int = 128,
+        bin_sizes: list = [2, 4, 8, 16, 32, 64],
+    ):
+        super().__init__()
+        self.bin_sizes = bin_sizes
+        self.channel_increment = channel_increment
+
+        self.blocks = nn.ModuleList()
+        self.max_pools = nn.ModuleList()
+
+        current_channels = in_channels
+        for i, bin_size in enumerate(self.bin_sizes):
+            
+            # Use DNAEmbedder for bin_size = 1
+            if bin_size == 1:
+                self.blocks[f"bin_{bin_size}"] = DNAEmbedder(
+                    in_channels=current_channels, 
+                    out_channels=initial_channels,
+                )
+                current_channels = initial_channels
+            else:
+                out_channels = current_channels + channel_increment
+
+                self.blocks[f"bin_{bin_size}"] = DownResBlock(
+                    in_channels=current_channels, 
+                    out_channels=out_channels,
+                )
+                current_channels = out_channels
+            
+            # Add max pooling (except for the last bin size)
+            if i < len(self.bin_sizes) - 1:
+                self.max_pools[f"pool_{bin_size}"] = nn.MaxPool1d(kernel_size=2, stride=2)
+    
+    def forward(self, x: torch.Tensor):
+        intermediates = {}
+        for i, bin_size in enumerate(self.bin_sizes):
+            x = self.blocks[f"bin_{bin_size}"](x)
+            intermediates[f"bin_size_{bin_size}"] = x
+
+            if i < len(self.bin_sizes) - 1:
+                x = x.transpose(1, 2)
+                x = self.max_pools[f"pool_{bin_size}"](x)
+                x = x.transpose(1, 2)
+        
+        return x, intermediates
