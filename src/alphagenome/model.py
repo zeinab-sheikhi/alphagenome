@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from typing import Optional
+from alphagenome.utils import apply_rope
 
 
 class RMSBatchNorm1D(nn.Module):
@@ -11,19 +12,21 @@ class RMSBatchNorm1D(nn.Module):
         num_features: int,
         eps: float = 1e-6,
         momentum: float = 0.9,
+        device: torch.device | None = None
     ):
         super().__init__()
         self.eps = eps 
         self.momentum = momentum
 
-        self.gamma = nn.Parameter(torch.ones(num_features))  # scale
-        self.beta = nn.Parameter(torch.zeros(num_features))  # shift
+        self.gamma = nn.Parameter(torch.ones(num_features, device=device, dtype=torch.float32))  # scale
+        self.beta = nn.Parameter(torch.zeros(num_features, device=device, dtype=torch.float32))  # shift
 
-        self.register_buffer("running_rms_squared", torch.ones(num_features))
+        self.register_buffer("running_rms_squared", torch.ones(num_features, device=device, dtype=torch.float32))
     
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        assert x.shape[-1] == self.num_features
         if self.training:
-            batch_rms_squared = torch.mean(x.pow(2), dim=0, keepdim=True)  # (1, seq_len, num_features)
+            batch_rms_squared = torch.mean(x**2, dim=0, keepdim=True)  # (1, seq_len, num_features)
         else:
             batch_rms_squared = self.running_rms_squared.view(1, 1, -1)  # (1, 1, num_features)
         
@@ -198,3 +201,68 @@ class SequenceEncoder(nn.Module):
             x = x.transpose(1, 2)
         
         return x, intermediates
+
+
+class MultiHeadAttentionBlock(nn.Module):
+    def __init__(
+        self, 
+        input_dim: int, 
+        num_heads: int = 8, 
+        q_dim: int = 128, 
+        k_dim: int = 128, 
+        v_dim: int = 192,
+        dropout_rate: float = 0.1,
+    ):
+        super().__init__()
+
+        self.q_dim = q_dim
+        self.k_dim = k_dim
+        self.v_dim = v_dim
+
+        self.rms_norm = RMSBatchNorm1D(input_dim)
+        
+        # Multi-query attention: 8 query heads, 1 shared key/value head
+        self.q_proj = nn.Linear(input_dim, num_heads * q_dim, bias=False)
+        self.k_proj = nn.Linear(input_dim, k_dim, bias=False)
+        self.v_proj = nn.Linear(input_dim, v_dim, bias=False)
+
+        self.q_layernorm = nn.LayerNorm(q_dim)
+        self.k_layernorm = nn.LayerNorm(k_dim)
+        self.v_layernorm = nn.LayerNorm(v_dim)
+
+        self.out_proj = nn.Linear(num_heads * v_dim, input_dim, bias=True)
+        self.out_norm = RMSBatchNorm1D(input_dim)
+        self.out_dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x: torch.Tensor):
+        B, S, C = x.shape
+        x = self.rms_norm(x)
+        
+        # multi-query attention projections
+        q = self.q_proj(x)  # (B, S, num_heads * q_dim)
+        q = q.view(B, S, self.num_heads, self.q_dim)  # (B, S, num_heads, q_dim)
+        q = self.q_layernorm(q)
+
+        k = self.k_proj(x)  # (B, S, k_dim)
+        k = k.unsqueeze(2)  # (B, S, 1, k_dim)
+        k = self.k_layernorm(k)
+
+        v = self.v_proj(x)  # (B, S, v_dim)
+        v = v.unsqueeze(2)  # (B, S, 1, v_dim)
+        v = self.v_layernorm(v)
+        
+        q_rope = q.permute(0, 2, 1, 3).reshape(B * self.num_heads, S, self.q_dim)
+        q_rope = apply_rope(q_rope, max_position=8192)
+        q = q_rope.reshape(B, S, self.num_heads, self.q_dim).permute(0, 2, 1, 3)
+        
+        k_rope = k.squeeze(2)  # (B, S, k_dim)
+        k_rope = apply_rope(k_rope, max_position=8192)
+        k = k.unsqueeze(2)  # (B, S, 1, k_dim)
+
+        v_rope = v.squeeze(2)  # (B, S, v_dim)
+        v_rope = apply_rope(v_rope, max_position=8192)
+        v = v.unsqueeze(2)  # (B, S, 1, v_dim)
+
+        # q(B, S, H, C) @ k(B, S, 1, C) -> (B, H, S, S)
+        attention_logits = torch.einsum("bshc,bS1c->bhsS", q, k) / torch.sqrt(torch.tensor(self.k_dim, dtype=torch.float32))
+
