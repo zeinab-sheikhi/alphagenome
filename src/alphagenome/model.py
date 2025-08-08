@@ -266,3 +266,24 @@ class MultiHeadAttentionBlock(nn.Module):
         # q(B, S, H, C) @ k(B, S, 1, C) -> (B, H, S, S)
         attention_logits = torch.einsum("bshc,bS1c->bhsS", q, k) / torch.sqrt(torch.tensor(self.k_dim, dtype=torch.float32))
 
+
+class MLPBlock(nn.Module):
+    def __init__(
+        self,
+        input_dim: int, 
+        dropout_rate: float = 0.1,
+    ):
+        super().__init__()
+
+        self.mlp = nn.Sequential(
+            RMSBatchNorm1D(input_dim), 
+            nn.Linear(input_dim, 2 * input_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(2 * input_dim, input_dim), 
+            RMSBatchNorm1D(input_dim),
+            nn.Dropout(dropout_rate),
+        )
+    
+    def forward(self, x: torch.Tensor):
+        return self.mlp(x)
