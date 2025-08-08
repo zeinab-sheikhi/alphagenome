@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F
 
-from typing import Optional
+from typing import Optional, Tuple
 from alphagenome.utils import apply_rope
 
 
@@ -360,3 +360,54 @@ class MLPBlock(nn.Module):
     
     def forward(self, x: torch.Tensor):
         return self.mlp(x)
+
+
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,   # C - sequence feature dimension
+        pair_dim: int,  # F - pairwise feature dimension
+        num_layers: int = 9, 
+        num_heads: int = 8, 
+        repeat_factor: int = 16, 
+        q_dim: int = 128, 
+        k_dim: int = 128, 
+        v_dim: int = 192, 
+        dropout_rate: float = 0.1, 
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+
+        self.pair_update_block = None
+
+        self.attention_bias_blocks = nn.ModuleList([
+            AttentionBiasBlock(pair_dim, num_heads, repeat_factor)
+            for _ in range(num_layers)
+        ])
+
+        self.mha_blocks = nn.ModuleList([
+            MultiHeadAttentionBlock(input_dim, num_heads, q_dim, k_dim, v_dim, dropout_rate)
+            for _ in range(num_layers)
+        ])
+
+        self.mlp_blocks = nn.ModuleList([
+            MLPBlock(input_dim, dropout_rate)
+            for _ in range(num_layers)
+        ])
+    
+    def forward(
+        self,
+        x: torch.Tensor,  # (B, S, C)
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        pair_x = None
+
+        for i in range(self.num_layers):
+            # Update pairwise features on even layers
+            if i % 2 == 0:
+                pair_x = self.pair_update_block(x, pair_x)
+            
+            attention_bias = self.attention_bias_blocks[i](pair_x)
+            x = x + self.mha_blocks[i](x, attention_bias)
+            x = x + self.mlp_blocks[i](x)
+
+        return x, pair_x
