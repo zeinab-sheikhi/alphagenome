@@ -290,7 +290,12 @@ class MultiHeadAttentionBlock(nn.Module):
         self.out_norm = RMSBatchNorm1D(input_dim)
         self.out_dropout = nn.Dropout(dropout_rate)
 
-    def forward(self, x: torch.Tensor):
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_bias: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+    
         B, S, C = x.shape
         x = self.rms_norm(x)
         
@@ -321,6 +326,18 @@ class MultiHeadAttentionBlock(nn.Module):
 
         # q(B, S, H, C) @ k(B, S, 1, C) -> (B, H, S, S)
         attention_logits = torch.einsum("bshc,bS1c->bhsS", q, k) / torch.sqrt(torch.tensor(self.k_dim, dtype=torch.float32))
+
+        if attention_bias is not None:
+            attention_logits = attention_logits + attention_bias
+        
+        attention_logits = torch.tanh(attention_logits / 5.0) * 5.0
+        attention_weights = F.softmax(attention_logits, dim=-1)
+
+        y = torch.einsum("bhsS,bS1c->bshc", attention_weights, v)  # (B, S, H, v_dim)
+
+        y = y.reshape(B, S, self.num_heads * self.v_dim)
+        y = self.out_proj(y)
+        return self.out_dropout(self.out_dropout(y))
 
 
 class MLPBlock(nn.Module):
