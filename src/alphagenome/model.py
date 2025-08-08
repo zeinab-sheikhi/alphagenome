@@ -203,6 +203,62 @@ class SequenceEncoder(nn.Module):
         return x, intermediates
 
 
+class RMSBatchNormPairwise(nn.Module):
+    def __init__(self, input_features: int):
+        super().__init__()
+        self.norm = RMSBatchNorm1D(input_features)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, P, P_, F_ = x.shape
+        x_reshaped = x.view(B, P * P_, F_)
+        x_norm = self.norm(x_reshaped)
+        return x_norm.view(B, P, P_, F_)
+
+
+class LinearPairwise(nn.Module):
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features, bias=False)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, P, P_, F_ = x.shape
+        x_reshaped = x.view(B, P * P_, F_)
+        x_proj = self.linear(x_reshaped)
+        return x_proj.view(B, P, P_, -1)
+
+
+class AttentionBiasBlock(nn.Module):
+    def __init__(
+        self, 
+        num_pairwise_channels: int,
+        num_heads: int = 8, 
+        repeat_factor: int = 16, 
+    ):
+        super().__init__()
+        self.num_heads = num_heads 
+        self.repeat_factor = repeat_factor 
+
+        self.sequential = nn.Sequential(
+            RMSBatchNormPairwise(num_pairwise_channels), 
+            nn.GELU(), 
+            LinearPairwise(num_pairwise_channels, num_heads),
+        )
+            
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        # (B, P, P, F) -> (B, P, P, H)
+        x = self.sequential(x)
+
+        # Repeat and permute 
+        B, P, _, H = x.shape
+        S = P * self.repeat_factor  # 512 * 16 = 8192
+
+        x_repeated = x[:, :, None, :, None, :].expand(B, P, self.repeat_factor, P, self.repeat_factor, H)
+        x_repeated = x_repeated.contiguous().view(B, S, S, H)
+
+        return x_repeated.permute(0, 3, 1, 2)  # (B, H, S, S)
+        
+
 class MultiHeadAttentionBlock(nn.Module):
     def __init__(
         self, 
