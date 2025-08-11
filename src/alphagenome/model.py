@@ -267,28 +267,32 @@ class MultiHeadAttentionBlock(nn.Module):
         q_dim: int = 128, 
         k_dim: int = 128, 
         v_dim: int = 192,
-        dropout_rate: float = 0.1,
+        dropout: float = 0.1,
+        rope_max_pos: int = 8192,
     ):
         super().__init__()
 
-        self.q_dim = q_dim
-        self.k_dim = k_dim
-        self.v_dim = v_dim
+        self.h = num_heads
+        self.dq = q_dim
+        self.dk = k_dim
+        self.dv = v_dim
+        self.rope_max_pos = rope_max_pos
 
-        self.rms_norm = RMSBatchNorm1D(input_dim)
+        self.pre_norm = RMSBatchNorm1D(input_dim)
         
         # Multi-query attention: 8 query heads, 1 shared key/value head
         self.q_proj = nn.Linear(input_dim, num_heads * q_dim, bias=False)
         self.k_proj = nn.Linear(input_dim, k_dim, bias=False)
         self.v_proj = nn.Linear(input_dim, v_dim, bias=False)
 
+        # LayerNorm on per-head channels
         self.q_layernorm = nn.LayerNorm(q_dim)
         self.k_layernorm = nn.LayerNorm(k_dim)
         self.v_layernorm = nn.LayerNorm(v_dim)
 
         self.out_proj = nn.Linear(num_heads * v_dim, input_dim, bias=True)
-        self.out_norm = RMSBatchNorm1D(input_dim)
-        self.out_dropout = nn.Dropout(dropout_rate)
+        self.post_norm = RMSBatchNorm1D(input_dim)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -296,48 +300,45 @@ class MultiHeadAttentionBlock(nn.Module):
         attention_bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
     
-        B, S, C = x.shape
-        x = self.rms_norm(x)
+        B, S, _ = x.shape
+        x = self.pre_norm(x)
         
-        # multi-query attention projections
-        q = self.q_proj(x)  # (B, S, num_heads * q_dim)
-        q = q.view(B, S, self.num_heads, self.q_dim)  # (B, S, num_heads, q_dim)
+        # Projections
+        q = self.q_proj(x)  # (B, S, H * Q)
+        k = self.k_proj(x)  # (B, S, K)
+        v = self.v_proj(x)  # (B, S, V)
+
+        # Headify Q
+        q = q.view(B, S, self.h, self.dq).permute(0, 2, 1, 3).contiguous()  # (B, H, S, Q)
         q = self.q_layernorm(q)
-
-        k = self.k_proj(x)  # (B, S, k_dim)
-        k = k.unsqueeze(2)  # (B, S, 1, k_dim)
         k = self.k_layernorm(k)
-
-        v = self.v_proj(x)  # (B, S, v_dim)
-        v = v.unsqueeze(2)  # (B, S, 1, v_dim)
         v = self.v_layernorm(v)
-        
-        q_rope = q.permute(0, 2, 1, 3).reshape(B * self.num_heads, S, self.q_dim)
-        q_rope = apply_rope(q_rope, max_position=8192)
-        q = q_rope.reshape(B, S, self.num_heads, self.q_dim).permute(0, 2, 1, 3)
-        
-        k_rope = k.squeeze(2)  # (B, S, k_dim)
-        k_rope = apply_rope(k_rope, max_position=8192)
-        k = k.unsqueeze(2)  # (B, S, 1, k_dim)
 
-        v_rope = v.squeeze(2)  # (B, S, v_dim)
-        v_rope = apply_rope(v_rope, max_position=8192)
-        v = v.unsqueeze(2)  # (B, S, 1, v_dim)
+        # RoPE on Q and K only
+        q = q.view(B * self.h, S, self.dq)
+        q = apply_rope(q, max_position=self.rope_max_pos)
+        q = q.view(B, self.h, S, self.dq)
 
-        # q(B, S, H, C) @ k(B, S, 1, C) -> (B, H, S, S)
-        attention_logits = torch.einsum("bshc,bS1c->bhsS", q, k) / torch.sqrt(torch.tensor(self.k_dim, dtype=torch.float32))
+        k = apply_rope(k, max_position=self.rope_max_pos)
 
+        # Attention logits
+        att_logits = torch.einsum("bhid,bjd->bhij", q, k) * self.dk ** -0.5
         if attention_bias is not None:
-            attention_logits = attention_logits + attention_bias
+            att_logits = att_logits + attention_bias  # (B, H, S, S)
         
-        attention_logits = torch.tanh(attention_logits / 5.0) * 5.0
-        attention_weights = F.softmax(attention_logits, dim=-1)
+        # soft-clip logits in [-5, 5]
+        att_logits = torch.tanh(att_logits / 5.0) * 5.0
 
-        y = torch.einsum("bhsS,bS1c->bshc", attention_weights, v)  # (B, S, H, v_dim)
+        attn = F.softmax(att_logits, dim=-1)
+        
+        y = torch.einsum("bhij, bjd->bhid", attn, v)  # (B, H, S, V)
 
-        y = y.reshape(B, S, self.num_heads * self.v_dim)
-        y = self.out_proj(y)
-        return self.out_dropout(self.out_dropout(y))
+        # Reshape and project back to input dimension
+        y = y.permute(0, 2, 1, 3).contiguous().view(B, S, self.h * self.dv)
+        y = self.out_proj(y)  # (B, S, C)
+        y = self.post_norm(y)
+        y = self.dropout(y)
+        return y
 
 
 class MLPBlock(nn.Module):

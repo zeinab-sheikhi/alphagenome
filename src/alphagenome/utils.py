@@ -21,6 +21,7 @@ def apply_rope(
     device = x.device
     seq_len = x.size(-2)
     dim = x.size(-1)
+    assert dim % 2 == 0, "RoPE requires even last dimension"
 
     if positions is None:
         positions = torch.arange(seq_len, device=device) 
