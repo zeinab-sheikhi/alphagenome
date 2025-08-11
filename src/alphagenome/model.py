@@ -250,13 +250,9 @@ class AttentionBiasBlock(nn.Module):
         x = self.sequential(x)
 
         # Repeat and permute 
-        B, P, _, H = x.shape
-        S = P * self.repeat_factor  # 512 * 16 = 8192
-
-        x_repeated = x[:, :, None, :, None, :].expand(B, P, self.repeat_factor, P, self.repeat_factor, H)
-        x_repeated = x_repeated.contiguous().view(B, S, S, H)
-
-        return x_repeated.permute(0, 3, 1, 2)  # (B, H, S, S)
+        x = x.repeat_interleave(self.repeat_factor, dim=1).repeat_interleave(self.repeat_factor, dim=2)  # (B, S, S, H)
+        x = x.permute(0, 3, 1, 2).contiguous()  # (B, H, S, S)
+        return x
         
 
 class MultiHeadAttentionBlock(nn.Module):
