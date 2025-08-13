@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F
 
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from alphagenome.utils import apply_rope, central_mask_features, relative_shifts
 
 
@@ -598,4 +598,63 @@ class PairUpdateBlock(nn.Module):
         x = y if pair_input is None else pair_input + y
         x = x + self.row_attn(x)
         x = x + self.pair_mlp(x)
+        return x
+
+
+class UpResBlock(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        num_channels: int,
+        kernel_size: int = 5,
+        residual_scale_init: float = 0.9,
+    ):
+        super().__init__()
+        self.num_channels = num_channels
+        self.residual_scale = nn.Parameter(torch.tensor(residual_scale_init))
+        self.conv_block1 = ConvBlock(input_dim, num_channels, kernel_size=kernel_size) 
+        self.conv_block2 = ConvBlock(num_channels, num_channels, kernel_size=1)
+        self.conv_block3 = ConvBlock(num_channels, num_channels, kernel_size=kernel_size)
+    
+    def forward(self, x: torch.Tensor, unet_skip: torch.Tensor) -> torch.Tensor:
+        num_channels = unet_skip.shape[2]
+        assert num_channels == self.num_channels, f"Expected num_channels={self.num_channels}, but got {num_channels}"
+        out = self.conv_block1(x) + x[:, :, :num_channels]
+        out = out.repeat_interleave(out, 2, dim=1) * self.residual_scale
+        out = out + self.conv_block2(unet_skip)
+        return out + self.conv_block3(out)
+
+
+class SequenceDecoder(nn.Module):
+    def __init__(
+        self,
+        in_channels: int, 
+        skip_channels: Dict[int, int],
+        kernel_size: int = 5, 
+        bin_list: List[int] | None = None,
+    ):
+        super().__init__()
+        self.bin_list = bin_list or [64, 32, 16, 8, 4, 2, 1]
+        self.blocks = nn.ModuleList()
+        current_channel = in_channels
+        
+        for bin_size in self.bin_list:
+            skip_channel = skip_channels[bin_size]
+            self.blocks.append(
+                UpResBlock(
+                    input_dim=current_channel, 
+                    num_channels=skip_channel,
+                    kernel_size=kernel_size,
+                )
+            )
+            current_channel = skip_channel
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        intermediates: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        for block, bin_size in zip(self.blocks, self.bin_list):
+            skip = intermediates[f"bin_size_{bin_size}"]
+            x = block(x, skip)
         return x
