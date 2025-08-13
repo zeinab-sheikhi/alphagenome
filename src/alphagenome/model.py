@@ -245,9 +245,7 @@ class AttentionBiasBlock(nn.Module):
         )
             
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-
-        # (B, P, P, F) -> (B, P, P, H)
-        x = self.sequential(x)
+        x = self.sequential(x)  # (B, P, P, H)
 
         # Repeat and permute 
         x = x.repeat_interleave(self.repeat_factor, dim=1).repeat_interleave(self.repeat_factor, dim=2)  # (B, S, S, H)
@@ -408,3 +406,21 @@ class TransformerBlock(nn.Module):
             x = x + self.mlp_blocks[i](x)
 
         return x, pair_x
+
+
+class SequenceToPairBlock(nn.Module):
+    def __init__(self, in_din: int, out_dim: int = 512, num_heads: int = 32, k: int = 128):
+
+        super().__init__()
+        avg_pooling = nn.AdaptiveAvgPool1d(out_dim)
+        rms_norm = nn.RMSNorm(out_dim)
+        self.q_proj = nn.Linear(num_heads, k, bias=False)
+        self.k_proj = nn.Linear(num_heads, k, bias=False)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, S, C = x.shape
+        x = x.permute(0, 2, 1)
+        x = self.avg_pooling(x)
+        x = x.permute(0, 2, 1)
+        x = self.rms_norm(x)
+        

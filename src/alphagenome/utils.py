@@ -1,4 +1,5 @@
 import torch 
+import torch.nn.functional as F
 
 
 def geomspace(start, end, steps, device=None, dtype=torch.float32):
@@ -39,3 +40,24 @@ def apply_rope(
     x_rotated = torch.stack((-x_odd, x_even), dim=-1).reshape_as(x)
 
     return x * torch.cos(theta) + x_rotated * torch.sin(theta)
+
+
+def central_mask_features(sequence_length: int, feature_size: int):
+    relative_positions = torch.arange(2 * sequence_length - 1) - (sequence_length - 1)
+    center_widths = torch.arange(feature_size // 2) + geomspace(
+        1, sequence_length - feature_size // 2 + 1, feature_size // 2,
+    )
+    embeddings = center_widths[None, :] > torch.abs(relative_positions)[:, None]  # (2 * sequence_length - 1, feature_size // 2)
+    return torch.cat([
+        embeddings, 
+        torch.sign(relative_positions)[:, None] * embeddings
+    ], dim=-1)
+
+
+def relative_shifts(x: torch.Tensor) -> torch.Tensor:
+    *B, S, num_diagonal = x.shape
+    zero = x.new_zeros(*B, S, 1)
+    x = torch.cat([zero, x], dim=-1)   # (*B, S, num_diagonal + 1)
+    x = x.view(*B, num_diagonal + 1, S)
+    x = x[..., 1:, :]
+    return x.reshape(*B, S, num_diagonal)
