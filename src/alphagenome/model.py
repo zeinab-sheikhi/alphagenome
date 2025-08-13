@@ -467,27 +467,23 @@ class SequenceToPairBlock(nn.Module):
             -1, self.H, self.D
         )    # (2P-1, H, D)
 
-        rel_q = torch.einsum('bqhc,phc->bhqp', q + self.q_bias, pos_encoding)   # (B, H, Q, 2P-1)
-        rel_q = relative_shifts(rel_q)                                     # (B, H, Q, 2P-1) shifted
-        rel_q = rel_q[..., (self.P - 1):(self.P - 1 + self.P)]             # (B, H, Q, P)
-        rel_q_a = rel_q.permute(0, 2, 3, 1)                                # (B, Q, K, H)
+        rel_q = torch.einsum('bqhc,phc->bhqp', q + self.q_bias, pos_encoding)   # (B, H, P, 2P-1)
+        rel_q = relative_shifts(rel_q)                                     # (B, H, P, 2P-1) shifted
+        rel_q = rel_q[..., (self.P - 1):(self.P - 1 + self.P)]             # (B, H, P, P)
+        rel_q_a = rel_q.permute(0, 2, 3, 1)                                # (B, P, P, H)
         
-        rel_k = torch.einsum("bkhc,phc->bhkp", k + self.k_bias, pos_encoding)  # (B,H,K,2P-1)
-        rel_k = relative_shifts(rel_k)                                     # (B, H, K, 2P-1) shifted
-        rel_k = rel_k[..., (self.P - 1):(self.P - 1 + self.P)]             # (B, H, K, P)
-        rel_k_a = rel_k.permute(0, 3, 2, 1)                                # (B, Q, K, H)
-
-        rel_term = 0.5 * (rel_q_a + rel_k_a)        
+        rel_k = torch.einsum("bkhc,phc->bhkp", k + self.k_bias, pos_encoding)  # (B, H, P, 2P-1)
+        rel_k = relative_shifts(rel_k)                                     # (B, H, P, 2P-1) shifted
+        rel_k = rel_k[..., (self.P - 1):(self.P - 1 + self.P)]             # (B, H, P, P)
+        rel_k_a = rel_k.permute(0, 3, 2, 1)                                # (B, P, P, H)
         
-        a = (
-            torch.einsum("bqhc,bkhc->bqkh", q, k) + 
-            rel_term
-        )
+        a = torch.einsum("bqhc,bkhc->bqkh", q, k) 
+        a = a + 0.5 * (rel_q_a + rel_k_a)  # (B, P, P, H)                   
 
-        a_proj = self.pair_linear(a)  # (B, Q, K, out_dim)
+        a_proj = self.pair_linear(a)  # (B, P, P, out_dim)
 
-        y_q = self.y_q_linear(F.gelu(x))
-        y_k = self.y_k_linear(F.gelu(x))
+        y_q = self.y_q_linear(F.gelu(x))  # (B, P, out_dim)
+        y_k = self.y_k_linear(F.gelu(x))  # (B, P, out_dim)
 
-        out = a_proj + y_q[:, :, None, :] + y_k[:, None, :, :]
+        out = a_proj + y_q[:, :, None, :] + y_k[:, None, :, :]  # (B, P, P, out_dim)
         return self.dropout(out)
