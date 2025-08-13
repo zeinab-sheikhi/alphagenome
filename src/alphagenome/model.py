@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from typing import Optional, Tuple
-from alphagenome.utils import apply_rope
+from alphagenome.utils import apply_rope, central_mask_features, relative_shifts
 
 
 class RMSBatchNorm1D(nn.Module):
@@ -409,18 +409,85 @@ class TransformerBlock(nn.Module):
 
 
 class SequenceToPairBlock(nn.Module):
-    def __init__(self, in_din: int, out_dim: int = 512, num_heads: int = 32, k: int = 128):
+    def __init__(
+        self,
+        in_dim: int,
+        sequence_length: int = 8192,
+        pair_length: int = 512, 
+        num_heads: int = 32,
+        head_dim: int = 128,
+        pos_feat_size: int = 64,
+        out_dim: int = 128, 
+        dropout: float = 0.1, 
+    ):
 
         super().__init__()
-        avg_pooling = nn.AdaptiveAvgPool1d(out_dim)
-        rms_norm = nn.RMSNorm(out_dim)
-        self.q_proj = nn.Linear(num_heads, k, bias=False)
-        self.k_proj = nn.Linear(num_heads, k, bias=False)
-    
+        assert sequence_length % pair_length == 0, "sequence_length must be a multiple of pair_length"
+
+        self.in_dim = in_dim
+        self.S = sequence_length
+        self.P = pair_length
+        self.pool_size = sequence_length // pair_length
+
+        self.H = num_heads
+        self.D = head_dim
+        self.pos_feat_size = pos_feat_size
+        
+        self.q_proj = nn.Linear(in_dim, self.H * self.D, bias=False)
+        self.k_proj = nn.Linear(in_dim, self.H * self.D, bias=False)
+
+        self.pos_linear = nn.Linear(self.pos_feat_size, self.H * self.D, bias=True)
+        
+        self.q_bias = nn.Parameter(torch.zeros(1, 1, self.H, self.D))
+        self.k_bias = nn.Parameter(torch.zeros(1, 1, self.H, self.D))
+
+        self.y_q_linear = nn.Linear(in_dim, out_dim, bias=False)
+        self.y_k_linear = nn.Linear(in_dim, out_dim, bias=False)
+
+        self.pair_linear = nn.Linear(self.H, out_dim)
+        self.dropout = nn.Dropout(dropout)
+        
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, S, C = x.shape
-        x = x.permute(0, 2, 1)
-        x = self.avg_pooling(x)
-        x = x.permute(0, 2, 1)
-        x = self.rms_norm(x)
+        assert S == self.S, f"Expected sequence length {self.S}, but got {S}"
+        assert C == self.in_dim, f"Expected input dimension {self.in_dim}, but got {C}"
+
+        x_pooled = F.avg_pool1d(x.transpose(1, 2), kernel_size=self.pool_size, stride=self.pool_size).transpose(1, 2)  # (B, P, C)
+        x_norm = F.rms_norm(x_pooled, normalized_shape=x_pooled.size(-1))  # (B, P, C)
+
+        q = self.q_proj(x_norm).view(B, self.P, self.H, self.D)  # (B, P, H, D)
+        k = self.k_proj(x_norm).view(B, self.P, self.H, self.D)  # (B, P, H, D)
         
+        pos_features = central_mask_features(
+            sequence_length=self.P, 
+            feature_size=self.pos_feat_size,
+        )  # (2P-1, pos_feat_size)
+
+        pos_encoding = self.pos_linear(pos_features).view(
+            -1, self.H, self.D
+        )    # (2P-1, H, D)
+
+        rel_q = torch.einsum('bqhc,phc->bhqp', q + self.q_bias, pos_encoding)   # (B, H, Q, 2P-1)
+        rel_q = relative_shifts(rel_q)                                     # (B, H, Q, 2P-1) shifted
+        rel_q = rel_q[..., (self.P - 1):(self.P - 1 + self.P)]             # (B, H, Q, P)
+        rel_q_a = rel_q.permute(0, 2, 3, 1)                                # (B, Q, K, H)
+        
+        rel_k = torch.einsum("bkhc,phc->bhkp", k + self.k_bias, pos_encoding)  # (B,H,K,2P-1)
+        rel_k = relative_shifts(rel_k)                                     # (B, H, K, 2P-1) shifted
+        rel_k = rel_k[..., (self.P - 1):(self.P - 1 + self.P)]             # (B, H, K, P)
+        rel_k_a = rel_k.permute(0, 3, 2, 1)                                # (B, Q, K, H)
+
+        rel_term = 0.5 * (rel_q_a + rel_k_a)        
+        
+        a = (
+            torch.einsum("bqhc,bkhc->bqkh", q, k) + 
+            rel_term
+        )
+
+        a_proj = self.pair_linear(a)  # (B, Q, K, out_dim)
+
+        y_q = self.y_q_linear(F.gelu(x))
+        y_k = self.y_k_linear(F.gelu(x))
+
+        out = a_proj + y_q[:, :, None, :] + y_k[:, None, :, :]
+        return self.dropout(out)

@@ -1,5 +1,4 @@
 import torch 
-import torch.nn.functional as F
 
 
 def geomspace(start, end, steps, device=None, dtype=torch.float32):
