@@ -612,17 +612,17 @@ class UpResBlock(nn.Module):
         super().__init__()
         self.num_channels = num_channels
         self.residual_scale = nn.Parameter(torch.tensor(residual_scale_init))
-        self.conv_block1 = ConvBlock(input_dim, num_channels, kernel_size=kernel_size) 
-        self.conv_block2 = ConvBlock(num_channels, num_channels, kernel_size=1)
-        self.conv_block3 = ConvBlock(num_channels, num_channels, kernel_size=kernel_size)
+        self.conv_x = ConvBlock(input_dim, num_channels, kernel_size=kernel_size) 
+        self.conv_skip_1x1 = ConvBlock(num_channels, num_channels, kernel_size=1)
+        self.conv_out = ConvBlock(num_channels, num_channels, kernel_size=kernel_size)
     
     def forward(self, x: torch.Tensor, unet_skip: torch.Tensor) -> torch.Tensor:
         num_channels = unet_skip.shape[2]
         assert num_channels == self.num_channels, f"Expected num_channels={self.num_channels}, but got {num_channels}"
-        out = self.conv_block1(x) + x[:, :, :num_channels]
+        out = self.conv_x(x) + x[:, :, :num_channels]
         out = out.repeat_interleave(out, 2, dim=1) * self.residual_scale
-        out = out + self.conv_block2(unet_skip)
-        return out + self.conv_block3(out)
+        out = out + self.conv_skip_1x1(unet_skip)
+        return out + self.conv_out(out)
 
 
 class SequenceDecoder(nn.Module):
@@ -636,18 +636,18 @@ class SequenceDecoder(nn.Module):
         super().__init__()
         self.bin_list = bin_list or [64, 32, 16, 8, 4, 2, 1]
         self.blocks = nn.ModuleList()
-        current_channel = in_channels
+        current_c = in_channels
         
         for bin_size in self.bin_list:
             skip_channel = skip_channels[bin_size]
             self.blocks.append(
                 UpResBlock(
-                    input_dim=current_channel, 
+                    input_dim=current_c, 
                     num_channels=skip_channel,
                     kernel_size=kernel_size,
                 )
             )
-            current_channel = skip_channel
+            current_c = skip_channel
 
     def forward(
         self,
