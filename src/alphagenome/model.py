@@ -507,12 +507,36 @@ class RowAttentionBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, P, P2, Fdim = x.shape
-        assert Fdim == self.in_dim, f"Expected input dimension {self.in_dim}, but got {F_}"
+        assert Fdim == self.in_dim, f"Expected input dimension {self.in_dim}, but got {Fdim}"
         x = self.rms_norm(x)  # (B, P, P, F)
         q = self.q_proj(x)  # (B, P, P, proj_dim)
         k = self.k_proj(x)  # (B, P, P, proj_dim)
         v = self.v_proj(x)  # (B, P, P, proj_dim)
-        
         x = torch.einsum("bpPf,bpkf->bpPk", q, k) / torch.sqrt(self.k_proj)  # (B, P, P, P)
         x = torch.einsum("bpPk,bpkf->bpPf", torch.softmax(x, dim=-1), v)  # (B, P, P, D)
         return self.dropout(x)
+
+
+class PairMLPBlock(nn.Module):
+    def __init__(self, in_dim: int, dropout: float = 0.1):
+        super().__init__()
+        self.rms_norm = nn.RMSNorm(normalized_shape=self.in_dim)
+        self.linear1 = nn.Linear(self.in_dim, 2 * in_dim)
+        self.linear2 = nn.Linear(2 * in_dim, self.in_dim)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.rms_norm(x)
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        return self.dropout(x)
+
+
+class PairUpdateBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pass
