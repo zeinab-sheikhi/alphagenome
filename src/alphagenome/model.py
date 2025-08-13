@@ -361,27 +361,51 @@ class TransformerBlock(nn.Module):
     def __init__(
         self,
         input_dim: int,   # C - sequence feature dimension
-        pair_dim: int,  # F - pairwise feature dimension
+        pair_dim: int,    # F - pairwise feature dimension
+        sequence_length: int = 8192,  # S
+        pair_length: int = 512,      # P
         num_layers: int = 9, 
         num_heads: int = 8, 
-        repeat_factor: int = 16, 
         q_dim: int = 128, 
         k_dim: int = 128, 
         v_dim: int = 192, 
+        num_rel_heads: int = 32,
+        rel_head_dim: int = 128,
+        pos_feat_size: int = 64,
         dropout_rate: float = 0.1, 
     ):
         super().__init__()
+        self.S = sequence_length
+        self.P = pair_length
+        self.repeat_factor = sequence_length // pair_length 
         self.num_layers = num_layers
 
-        self.pair_update_block = None
+        self.pair_update_block = PairUpdateBlock(
+            in_dim=input_dim,
+            sequence_length=sequence_length,
+            pair_length=pair_length,
+            num_heads=num_rel_heads,
+            head_dim=rel_head_dim,
+            pos_feat_size=pos_feat_size,
+            pair_feat_dim=pair_dim,
+            dropout=dropout_rate,
+        )
 
         self.attention_bias_blocks = nn.ModuleList([
-            AttentionBiasBlock(pair_dim, num_heads, repeat_factor)
+            AttentionBiasBlock(pair_dim, num_heads, self.repeat_factor)
             for _ in range(num_layers)
         ])
 
         self.mha_blocks = nn.ModuleList([
-            MultiHeadAttentionBlock(input_dim, num_heads, q_dim, k_dim, v_dim, dropout_rate)
+            MultiHeadAttentionBlock(
+                input_dim=input_dim,
+                num_heads=num_heads,
+                q_dim=q_dim,
+                k_dim=k_dim,
+                v_dim=v_dim,
+                dropout=dropout_rate,
+                rope_max_pos=sequence_length,
+            )
             for _ in range(num_layers)
         ])
 
@@ -394,6 +418,8 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,  # (B, S, C)
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        B, S, C = x.shape
+        assert S == self.S, f"Expected S={self.S}, got {S}"
         pair_x = None
 
         for i in range(self.num_layers):
@@ -535,8 +561,41 @@ class PairMLPBlock(nn.Module):
 
 
 class PairUpdateBlock(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        in_dim: int,                  # C (sequence channel dim going into seq2pair)
+        sequence_length: int = 8192,  # S
+        pair_length: int = 512,       # P
+        num_heads: int = 32,
+        head_dim: int = 128,
+        pos_feat_size: int = 64,
+        pair_feat_dim: int = 128,    # F (must be consistent across the three sub-blocks)
+        dropout: float = 0.1,
+    ):
         super().__init__()
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
+        self.seq2pair = SequenceToPairBlock(
+            in_dim=in_dim,
+            sequence_length=sequence_length,
+            pair_length=pair_length,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            pos_feat_size=pos_feat_size,
+            out_dim=pair_feat_dim,
+            dropout=dropout,
+        )
+        self.row_attn = RowAttentionBlock(
+            in_dim=pair_feat_dim,
+            proj_dim=pair_feat_dim,
+            dropout=dropout,
+        )
+        self.pair_mlp = PairMLPBlock(
+            in_dim=pair_feat_dim,
+            dropout=dropout,
+        )
+
+    def forward(self, sequence_input: torch.Tensor, pair_input: torch.Tensor | None) -> torch.Tensor:
+        y = self.seq2pair(sequence_input)
+        x = y if pair_input is None else pair_input + y
+        x = x + self.row_attn(x)
+        x = x + self.pair_mlp(x)
+        return x
