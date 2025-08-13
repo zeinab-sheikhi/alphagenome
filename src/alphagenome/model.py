@@ -482,8 +482,37 @@ class SequenceToPairBlock(nn.Module):
 
         a_proj = self.pair_linear(a)  # (B, P, P, out_dim)
 
-        y_q = self.y_q_linear(F.gelu(x))  # (B, P, out_dim)
-        y_k = self.y_k_linear(F.gelu(x))  # (B, P, out_dim)
+        y_q = self.y_q_linear(F.gelu(x_norm))  # (B, P, out_dim)
+        y_k = self.y_k_linear(F.gelu(x_norm))  # (B, P, out_dim)
 
         out = a_proj + y_q[:, :, None, :] + y_k[:, None, :, :]  # (B, P, P, out_dim)
         return self.dropout(out)
+
+
+class RowAttentionBlock(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        proj_dim: int = 128, 
+        dropout: float = 0.1, 
+    ):
+        super().__init__()
+        self.in_dim = in_dim
+
+        self.rms_norm = nn.RMSNorm(normalized_shape=in_dim)
+        self.q_proj = nn.Linear(in_dim, proj_dim, bias=False)
+        self.k_proj = nn.Linear(in_dim, proj_dim, bias=False)
+        self.v_proj = nn.Linear(in_dim, proj_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, P, P2, Fdim = x.shape
+        assert Fdim == self.in_dim, f"Expected input dimension {self.in_dim}, but got {F_}"
+        x = self.rms_norm(x)  # (B, P, P, F)
+        q = self.q_proj(x)  # (B, P, P, proj_dim)
+        k = self.k_proj(x)  # (B, P, P, proj_dim)
+        v = self.v_proj(x)  # (B, P, P, proj_dim)
+        
+        x = torch.einsum("bpPf,bpkf->bpPk", q, k) / torch.sqrt(self.k_proj)  # (B, P, P, P)
+        x = torch.einsum("bpPk,bpkf->bpPf", torch.softmax(x, dim=-1), v)  # (B, P, P, D)
+        return self.dropout(x)
