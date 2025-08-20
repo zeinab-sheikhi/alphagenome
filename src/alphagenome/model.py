@@ -2,8 +2,12 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F
 
-from typing import Dict, Optional, Tuple, List
-from alphagenome.utils import apply_rope, central_mask_features, relative_shifts
+from typing import Dict, List, Optional, Tuple 
+from alphagenome.utils import (
+    apply_rope,
+    central_mask_features,
+    relative_shifts
+)
 
 
 class RMSBatchNorm1D(nn.Module):
@@ -104,6 +108,7 @@ class ConvBlock(nn.Module):
         return x
 
 
+# Sequence Encoder Block 
 class DNAEmbedder(nn.Module):
     def __init__(
         self,
@@ -203,6 +208,7 @@ class SequenceEncoder(nn.Module):
         return x, intermediates
 
 
+# Transformer Block 
 class RMSBatchNormPairwise(nn.Module):
     def __init__(self, input_features: int):
         super().__init__()
@@ -434,6 +440,7 @@ class TransformerBlock(nn.Module):
         return x, pair_x
 
 
+# Pairwise Block
 class SequenceToPairBlock(nn.Module):
     def __init__(
         self,
@@ -601,6 +608,7 @@ class PairUpdateBlock(nn.Module):
         return x
 
 
+# Sequence Decoder Block
 class UpResBlock(nn.Module):
     def __init__(
         self,

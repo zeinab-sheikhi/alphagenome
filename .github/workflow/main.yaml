@@ -1,0 +1,43 @@
+name: main
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: check out
+        uses: actions/checkout@v4
+
+      - name: setup the environment
+        uses: ./.github/actions/setup-python-env
+
+      - name: Run checks
+        run: make checks
+
+  tests-and-type-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+      fail-fast: false
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: check out
+        uses: actions/checkout@v4
+
+      - name: setup the environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: check typing
+        run: uv run mypy src
