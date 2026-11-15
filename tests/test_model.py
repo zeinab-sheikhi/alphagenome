@@ -1,6 +1,6 @@
 
-import torch
 import pytest
+import torch
 
 from alphagenome.model import SequenceEncoder
 

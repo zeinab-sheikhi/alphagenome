@@ -1,4 +1,4 @@
-import torch 
+import torch
 
 
 def geomspace(start, end, steps, device=None, dtype=torch.float32):

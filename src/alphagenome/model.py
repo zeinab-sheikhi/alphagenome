@@ -1,13 +1,10 @@
+from typing import dict, list, Optional
+
 import torch
-import torch.nn as nn 
+import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Dict, List, Optional, Tuple 
-from alphagenome.utils import (
-    apply_rope,
-    central_mask_features,
-    relative_shifts
-)
+from alphagenome.utils import apply_rope, central_mask_features, relative_shifts
 
 
 class RMSBatchNorm1D(nn.Module):
@@ -423,7 +420,7 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,  # (B, S, C)
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         B, S, C = x.shape
         assert S == self.S, f"Expected S={self.S}, got {S}"
         pair_x = None
@@ -637,9 +634,9 @@ class SequenceDecoder(nn.Module):
     def __init__(
         self,
         in_channels: int, 
-        skip_channels: Dict[int, int],
+        skip_channels: dict[int, int],
         kernel_size: int = 5, 
-        bin_list: List[int] | None = None,
+        bin_list: list[int] | None = None,
     ):
         super().__init__()
         self.bin_list = bin_list or [64, 32, 16, 8, 4, 2, 1]
@@ -660,7 +657,7 @@ class SequenceDecoder(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        intermediates: Dict[str, torch.Tensor],
+        intermediates: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         for block, bin_size in zip(self.blocks, self.bin_list):
             skip = intermediates[f"bin_size_{bin_size}"]
