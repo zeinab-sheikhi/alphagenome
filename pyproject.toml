@@ -17,14 +17,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "torch",
+    "torch==2.15.0",
     "numpy",
 ]
 
-[tool.uv]
-dev-dependencies = [
-    "pytest>=8.4.1",
-]
 
 [build-system]
 requires = ["hatchling"]
