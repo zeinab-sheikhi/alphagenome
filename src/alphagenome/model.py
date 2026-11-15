@@ -1,8 +1,8 @@
-from typing import dict, list, Optional
+from typing import Optional, dict, list
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from alphagenome.utils import apply_rope, central_mask_features, relative_shifts
 
