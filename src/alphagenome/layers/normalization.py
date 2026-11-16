@@ -1,20 +1,25 @@
 """All the Normalization layers preserve the input shape."""
-import torch 
-import torch.nn as nn
-import torch.nn.functional as F
+
+import torch
+from torch import nn
 
 
 class RMSNorm(nn.Module):
-    def __init__(self):
-        pass
+    def __init__(self, n_channels: int):
+        super().__init__()
+        self.n_channels = n_channels
+        self.scale = nn.Parameter(torch.ones(n_channels))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
+        B, S, C = x.size()
+        if self.n_channels != C:
+            raise ValueError(f"scale requires {self.n_channels} channels but {C} were given!")
 
 
 class BatchNorm(nn.Module):
     def __init__(self):
-        pass
+        super().__init__()
+        
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         pass
@@ -22,7 +27,7 @@ class BatchNorm(nn.Module):
 
 class RMSBatchNorm(nn.Module):
     def __init__(self):
-        pass
+        super().__init__()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, C = x.size()
@@ -30,4 +35,8 @@ class RMSBatchNorm(nn.Module):
 
 if __name__ == "__main__":
     x = torch.tensor([[[3, 4]], [[0, 2]]])
+    n_channels = 3
+    rms_norm = RMSNorm(n_channels)
+    rms_norm(x)
+
     print(x.shape)
