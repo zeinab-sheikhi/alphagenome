@@ -4,6 +4,23 @@ import torch
 from torch import nn
 
 
+class BatchNorm(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pass
+
+    
+class LayerNorm(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pass
+
+
 class RMSNorm(nn.Module):
     def __init__(self, n_channels: int, epsilon: float = 1e-6, learn_scale: bool = False):
         super().__init__()
@@ -19,15 +36,6 @@ class RMSNorm(nn.Module):
         rms = (x.float().square().mean(dim=-1, keepdim=True) + self.epsilon) ** 0.5
         output = self.scale * (x / rms) if self.scale is not None else (x / rms)
         return output
-        
-
-class BatchNorm(nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
 
 
 class RMSBatchNorm(nn.Module):
