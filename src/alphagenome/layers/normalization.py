@@ -5,11 +5,11 @@ from torch import nn
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, n_channels: int, epsilon: float = 1e-6):
+    def __init__(self, n_channels: int, epsilon: float = 1e-6, learn_scale: bool = False):
         super().__init__()
         self.n_channels = n_channels
         self.epsilon = epsilon
-        self.scale = nn.Parameter(torch.ones(n_channels))
+        self.scale = nn.Parameter(torch.ones(n_channels)) if learn_scale else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Average squared input over the last dimension (channels)."""
@@ -17,7 +17,8 @@ class RMSNorm(nn.Module):
         if self.n_channels != C:
             raise ValueError(f"scale requires {self.n_channels} channels but {C} were given!")
         rms = (x.float().square().mean(dim=-1, keepdim=True) + self.epsilon) ** 0.5
-        return self.scale * (x / rms)
+        output = self.scale * (x / rms) if self.scale is not None else (x / rms)
+        return output
         
 
 class BatchNorm(nn.Module):
